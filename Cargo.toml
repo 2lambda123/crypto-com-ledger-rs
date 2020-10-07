@@ -8,7 +8,8 @@ members = [
 ]
 
 exclude = [
-  "examples/wasm"
+  "examples/wasm",
+  "examples/zemu-grpc-server",
 ]
 
 [profile.release]

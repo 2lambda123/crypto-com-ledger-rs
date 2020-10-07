@@ -66,12 +66,3 @@ impl Exchange for ledger_zemu::TransportZemuGrpc {
             .map_err(|_| TransportError::APDUExchangeError)
     }
 }
-
-#[trait_async]
-impl Exchange for ledger_zemu::TransportZemuHttp {
-    async fn exchange(&self, command: &APDUCommand) -> Result<APDUAnswer, TransportError> {
-        self.exchange(command)
-            .await
-            .map_err(|_| TransportError::APDUExchangeError)
-    }
-}
