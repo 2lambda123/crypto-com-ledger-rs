@@ -6,14 +6,14 @@ use grpc::prelude::*;
 use grpc::ClientConf;
 use ledger_apdu::{APDUAnswer, APDUCommand};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, CONTENT_TYPE};
-use reqwest::{Client as HttpClient, Response};
+use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 
 use zemu::ExchangeRequest;
 use zemu_grpc::ZemuCommandClient;
 
 use crate::zemu::ExchangeReply;
+use crate::zemu_grpc::{ZemuCommand, ZemuCommandServer};
 pub use errors::LedgerZemuError;
 
 pub struct TransportZemuGrpc {
@@ -43,65 +43,111 @@ impl TransportZemuGrpc {
     }
 }
 
-pub struct TransportZemuHttp {
-    url: String,
+pub struct ZemuGrpcServer {
+    grpc_port: u16,
+    zemu_host: String,
+    zemu_port: u16,
 }
 
+/// http request to zemu
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 struct ZemuRequest {
     apdu_hex: String,
 }
 
+/// http response from zemu
 #[derive(Deserialize, Debug, Clone)]
 struct ZemuResponse {
     data: String,
     error: Option<String>,
 }
 
-impl TransportZemuHttp {
-    pub fn new(host: &str, port: u16) -> Self {
+struct GrpcServerImpl {
+    zemu_host: String,
+    zemu_port: u16,
+}
+
+impl GrpcServerImpl {
+    pub fn new(zemu_host: String, zemu_port: u16) -> Self {
         Self {
-            url: format!("http://{}:{}", host, port),
+            zemu_host,
+            zemu_port,
         }
     }
 
-    pub async fn exchange(&self, command: &APDUCommand) -> Result<APDUAnswer, LedgerZemuError> {
-        let raw_command = hex::encode(command.serialize());
+    pub fn zemu_url(&self) -> String {
+        format!("http://{}:{}", self.zemu_host, self.zemu_port)
+    }
+}
+
+impl ZemuCommand for GrpcServerImpl {
+    fn exchange(
+        &self,
+        _: ::grpc::ServerHandlerContext,
+        req: ::grpc::ServerRequestSingle<ExchangeRequest>,
+        grpc_resp: ::grpc::ServerResponseUnarySink<ExchangeReply>,
+    ) -> ::grpc::Result<()> {
+        let message: ExchangeRequest = req.message;
+        let command = message.get_command();
+        log::debug!("get exchange request: {:?}", command);
+        let raw_command = hex::encode(command);
         let request = ZemuRequest {
             apdu_hex: raw_command,
         };
         let mut headers = HeaderMap::new();
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        let resp: Response = HttpClient::new()
-            .post(&self.url)
+        let zemu_url = self.zemu_url();
+        log::debug!("zemu url: {}", zemu_url);
+        let client = HttpClient::new();
+        let mut resp = client
+            .post(&zemu_url)
             .headers(headers)
-            .timeout(Duration::from_secs(5))
             .json(&request)
             .send()
-            .await
             .map_err(|e| {
                 log::error!("create http client error: {:?}", e);
-                LedgerZemuError::InnerError
+                grpc::Error::Other("send zemu request error")
             })?;
-        log::debug!("http response: {:?}", resp);
+        log::debug!("zemu http response: {:?}", resp);
 
         if resp.status().is_success() {
-            let result: ZemuResponse = resp.json().await.map_err(|e| {
+            let result: ZemuResponse = resp.json().map_err(|e| {
                 log::error!("error response: {:?}", e);
-                LedgerZemuError::ResponseError
+                grpc::Error::Other("zemu response error")
             })?;
             if result.error.is_none() {
-                Ok(APDUAnswer::from_answer(
-                    hex::decode(result.data).expect("decode error"),
-                ))
+                let mut reply = ExchangeReply::new();
+                reply.set_reply(hex::decode(result.data).expect("decode error"));
+                grpc_resp.finish(reply)
             } else {
-                Err(LedgerZemuError::ResponseError)
+                Err(grpc::Error::Other("http response error"))
             }
         } else {
-            log::error!("error response: {:?}", resp.status());
-            Err(LedgerZemuError::ResponseError)
+            Err(grpc::Error::Other("http status error"))
+        }
+    }
+}
+
+impl ZemuGrpcServer {
+    pub fn new(grpc_port: u16, zemu_host: String, zemu_port: u16) -> Self {
+        Self {
+            grpc_port,
+            zemu_host,
+            zemu_port,
+        }
+    }
+
+    pub fn run(&self) {
+        let grpc_server_impl = GrpcServerImpl::new(self.zemu_host.clone(), self.zemu_port);
+        let service_def = ZemuCommandServer::new_service_def(grpc_server_impl);
+        let mut server_builder = grpc::ServerBuilder::new_plain();
+        server_builder.add_service(service_def);
+        server_builder.http.set_port(self.grpc_port);
+        let _server = server_builder.build().expect("build");
+        loop {
+            std::thread::park()
         }
     }
 }

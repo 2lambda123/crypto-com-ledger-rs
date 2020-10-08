@@ -24,7 +24,7 @@ log = "0.4.11"
 protobuf = "2"
 grpc = "0.8.1"
 grpc-protobuf = "0.8.1"
-reqwest = { version = "0.10", features = ["json"]}
+reqwest = "0.9"
 hex = "0.4.2"
 serde = { version = "1.0", features = ["derive"] }
 ledger-apdu = { path = "../ledger-apdu", version = "0.4.0" }
