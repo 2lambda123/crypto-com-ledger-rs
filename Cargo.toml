@@ -3,11 +3,13 @@ members = [
     "ledger-apdu",
     "ledger-transport",
     "ledger-transport-hid",
+    "ledger-transport-zemu",
     "ledger-zondax-generic"
 ]
 
 exclude = [
-  "examples/wasm"
+  "examples/wasm",
+  "examples/zemu-grpc-server",
 ]
 
 [profile.release]
